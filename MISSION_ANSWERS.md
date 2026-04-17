@@ -1,8 +1,7 @@
 # MISSION ANSWERS — Day 12: Cloud Deployment Lab
 
-**Student:** Vo Chung  
-**Date:** 17/04/2026  
-**Course:** AICB-P1 VinUniversity
+**Student:** Võ Thanh Chung - 2A202600335  
+**Date:** 17/04/2026
 
 ---
 
@@ -88,9 +87,9 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", 
 **Image size comparison:**
 
 | Image | Base | Size (approx.) | Notes |
-|---|---|---|---|
-| `python:3.11` (single-stage) | Full CPython distribution | ~1.1 GB | Includes compiler, headers, test suite |
-| `python:3.11-slim` (multi-stage) | Debian slim | ~180–250 MB | Build tools left behind in builder stage |
+|---|---|----------------|---|
+| `python:3.11` (single-stage) | Full CPython distribution | 1.66 GB        | Includes compiler, headers, test suite |
+| `python:3.11-slim` (multi-stage) | Debian slim | 236 MB         | Build tools left behind in builder stage |
 
 Multi-stage build reduces image size by ~70–80% because the `gcc`, `libpq-dev`, and build caches from Stage 1 are **never copied** into the final image.
 
@@ -143,80 +142,109 @@ curl http://localhost/health
 
 ## Part 3: Cloud Deployment
 
-### Exercise 3.1 — Railway Deployment
+### Exercise 3.1 — Render Deployment (06-lab-complete)
 
-**Platform chosen:** Railway (recommended — fastest setup, < 5 minutes)
+**Platform chosen:** Render (Docker Web Service)  
+**Live URL:** https://day12-ha-tang-cloud-va-deployment-synm.onrender.com  
+**Module deployed:** `06-lab-complete` (Production AI Agent)
 
 **Deployment steps:**
 
-```bash
-# 1. Install Railway CLI
-npm i -g @railway/cli
+#### Step 1 — Prepare monorepo for Render
 
-# 2. Login
-railway login
+Since `06-lab-complete/` lives inside a monorepo, two changes were needed so Render can build from the repo root while targeting only this module's Dockerfile:
 
-# 3. Initialize project (in repo root)
-railway init
-
-# 4. Set environment variables
-railway variables set PORT=8000
-railway variables set ENVIRONMENT=production
-railway variables set AGENT_API_KEY=<your-secret-key>
-
-# 5. Deploy
-railway up
-
-# 6. Get public URL
-railway domain
+**`render.yaml` (created at repo root):**
+```yaml
+services:
+  - type: web
+    name: ai-agent-production
+    runtime: docker
+    dockerfilePath: ./06-lab-complete/Dockerfile
+    dockerContext: .
+    region: singapore
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: AGENT_API_KEY
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
 ```
 
-**`railway.toml` configuration** (`03-cloud-deployment/railway/railway.toml`):
-```toml
-[build]
-builder = "NIXPACKS"          # Auto-detects Python, installs deps
-
-[deploy]
-startCommand = "uvicorn app:app --host 0.0.0.0 --port $PORT"
-healthcheckPath = "/health"
-healthcheckTimeout = 30
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 3
+**`06-lab-complete/Dockerfile` (COPY paths updated to repo root):**
+```dockerfile
+COPY 06-lab-complete/requirements.txt .
+COPY 06-lab-complete/app/ ./app/
+COPY utils/ ./utils/
 ```
 
-**Deployment verification:**
+#### Step 2 — Render web service settings
+
+| Field | Value |
+|---|---|
+| Language | Docker |
+| Branch | `main` |
+| Region | Singapore (Southeast Asia) |
+| Root Directory | *(empty — repo root)* |
+| Dockerfile Path | `./06-lab-complete/Dockerfile` |
+
+#### Step 3 — Bug fixes during deployment
+
+| Error | Fix |
+|---|---|
+| `ModuleNotFoundError: No module named 'uvicorn'` | Changed `pip install --user` → `pip install --prefix=/install`, then `COPY /install /usr/local` so non-root `agent` user can import packages |
+| `AttributeError: MutableHeaders has no pop()` | Replaced `response.headers.pop("server", None)` with `if "server" in response.headers: del response.headers["server"]` |
+
+#### Step 4 — Auto-deploy
+
+Render watches the `main` branch. Every `git push origin main` triggers a zero-downtime rebuild automatically.
+
+**Live deployment verification:**
 
 ```bash
-# Health check → 200 OK
-curl https://your-app.railway.app/health
+# Root → service info
+curl https://day12-ha-tang-cloud-va-deployment-synm.onrender.com/
+# {"app":"Production AI Agent","version":"1.0.0","environment":"development",
+#  "endpoints":{"ask":"POST /ask (requires X-API-Key)","health":"GET /health","ready":"GET /ready"}}
 
-# Expected response:
-# {"status":"ok","uptime_seconds":42.3,"version":"1.0.0",...}
+# Health check → 200 OK ✅
+curl https://day12-ha-tang-cloud-va-deployment-synm.onrender.com/health
+# {"status":"ok","version":"1.0.0","uptime_seconds":480.7,"total_requests":9,
+#  "checks":{"llm":"openai"},"timestamp":"2026-04-17T10:48:36.867131+00:00"}
 
-# Ask endpoint
-curl -X POST https://your-app.railway.app/ask \
+# Readiness probe → ready ✅
+curl https://day12-ha-tang-cloud-va-deployment-synm.onrender.com/ready
+# {"ready":true}
+
+# Ask the agent (replace with your generated AGENT_API_KEY from Render dashboard)
+curl -X POST https://day12-ha-tang-cloud-va-deployment-synm.onrender.com/ask \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <AGENT_API_KEY>" \
   -d '{"question": "What is Docker?"}'
+# {"question":"What is Docker?","answer":"Container là cách đóng gói app...","model":"gpt-4o-mini",...}
 ```
 
-> **Note:** Replace `your-app.railway.app` with the actual URL from `railway domain`.
-
-**Why Railway over Render/Cloud Run for this lab:**
-- No Docker required — Nixpacks auto-detects Python
-- Free $5 credit on signup, no credit card needed
-- Deploy in < 5 minutes vs 10–30 min for others
-- Automatic HTTPS and custom domains
+**Why Render for this lab:**
+- Native Docker runtime — no vendor-specific config needed
+- `render.yaml` as Infrastructure as Code — reproducible deploys
+- Free tier with automatic HTTPS and custom domains
+- `autoDeploy: true` — every `git push` redeploys automatically
+- Singapore region — low latency for Southeast Asia users
 
 ---
 
-### Exercise 3.2 — Render (Optional)
+### Exercise 3.2 — Render Infrastructure as Code
 
-**`render.yaml`** (`03-cloud-deployment/render/render.yaml`) defines the full infrastructure as code:
+**`render.yaml`** (repo root) defines the full service as code:
 - Web service with `region: singapore`
-- `healthCheckPath: /health`
-- `autoDeploy: true` when GitHub branch updates
-- Redis add-on for caching
-- Secrets managed via `sync: false` env vars (entered in dashboard, never in git)
+- `dockerfilePath: ./06-lab-complete/Dockerfile` + `dockerContext: .` for monorepo support
+- `healthCheckPath: /health` — Render restarts container if health check fails
+- `autoDeploy: true` — continuous deployment on every push to `main`
+- `generateValue: true` for `AGENT_API_KEY` and `JWT_SECRET` — Render generates cryptographically secure secrets, never stored in git
 
 ---
 
@@ -488,6 +516,6 @@ Different instances served the conversation — conversation history survived be
 |---|---|---|
 | 1 | 6 anti-patterns identified + comparison table | ✅ |
 | 2 | Dockerfile analysis + multi-stage build explanation | ✅ |
-| 3 | Railway deployment with `railway.toml` | ✅ |
+| 3 | Render deployment — live at https://day12-ha-tang-cloud-va-deployment-synm.onrender.com | ✅ |
 | 4 | API Key auth + JWT + Rate limiting + Cost guard | ✅ |
 | 5 | Health checks + graceful shutdown + stateless Redis design | ✅ |
