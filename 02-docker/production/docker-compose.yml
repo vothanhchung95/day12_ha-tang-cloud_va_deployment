@@ -12,8 +12,6 @@
 # Stop:  docker compose down
 # ============================================================
 
-version: "3.9"
-
 services:
 
   # ──────────────────────────────────────
@@ -21,8 +19,8 @@ services:
   # ──────────────────────────────────────
   agent:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: 02-docker/production/Dockerfile
       target: runtime          # chỉ build stage "runtime", không build "builder"
     environment:
       - ENVIRONMENT=staging
